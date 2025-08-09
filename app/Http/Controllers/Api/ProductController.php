@@ -55,4 +55,18 @@ class ProductController extends Controller
         $product->delete();
         return response()->json(null, 204);
     }
+
+    public function availableForSales()
+    {
+        return response()->json([
+            'products' => Product::available()
+                ->orderBy('name')
+                ->get(['id', 'name', 'sale_price', 'stock', 'category']),
+            'categories' => [
+                'blanco', 'integral', 'dulce', 'artesanal', 'sin_gluten',
+                'regional', 'enriquecido', 'de_molde', 'crujiente',
+                'dulce_relleno', 'salado', 'festivo', 'vegano'
+            ]
+        ]);
+    }
 }

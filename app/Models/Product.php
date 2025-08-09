@@ -14,4 +14,11 @@ class Product extends Model
         'category',
         'stock',
     ];
+    
+    public function scopeAvailable($query)
+    {
+        return $query->where('stock', '>', 0);
+    }
 }
+
+

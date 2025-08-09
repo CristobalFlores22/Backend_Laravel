@@ -11,3 +11,7 @@ Route::get('/', function () {
 Route::resource('products', ProductController::class)
     ->only(['index', 'store', 'show', 'update', 'destroy'])
     ->names('api.products'); // Aquí el nombre debe coincidir con el recurso 'products'
+
+
+// Ruta especial para el módulo de ventas
+Route::get('products/available-for-sales', [ProductController::class, 'availableForSales']);
