@@ -10,13 +10,17 @@ return new class extends Migration
     {
         Schema::create('products', function (Blueprint $table) {
             $table->id();
-            $table->string('name');
+            $table->string('name', 100);
             $table->text('description')->nullable();
-            $table->decimal('purchase_price', 8, 2); // ← precio de compra
-            $table->decimal('sale_price', 8, 2);     // ← precio de venta
-            $table->string('category')->nullable();
-            $table->integer('stock')->default(0);
+            $table->decimal('purchase_price', 10, 2); // 10,2
+            $table->decimal('sale_price', 10, 2);     // 10,2
+            $table->string('category', 50);           // NOT NULL y 50
+            $table->unsignedInteger('stock')->default(0);
             $table->timestamps();
+
+            // Evitar duplicados por nombre (o por nombre+categoría si prefieres)
+            $table->unique(['name', 'category']);
+            $table->index('category');
         });
     }
 

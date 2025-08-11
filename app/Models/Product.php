@@ -14,11 +14,15 @@ class Product extends Model
         'category',
         'stock',
     ];
-    
+
+    protected $casts = [
+        'purchase_price' => 'decimal:2',
+        'sale_price' => 'decimal:2',
+        'stock' => 'integer',
+    ];
+
     public function scopeAvailable($query)
     {
         return $query->where('stock', '>', 0);
     }
 }
-
-
