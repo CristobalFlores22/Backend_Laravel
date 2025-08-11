@@ -15,3 +15,5 @@ Route::resource('products', ProductController::class)
 
 // Ruta especial para el módulo de ventas
 Route::get('products/available-for-sales', [ProductController::class, 'availableForSales']);
+Route::post('check-stock', [ProductController::class, 'checkStock']);
+Route::post('update-stock', [ProductController::class, 'updateStock']);
