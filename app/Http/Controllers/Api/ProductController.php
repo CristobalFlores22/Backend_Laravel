@@ -137,33 +137,49 @@ class ProductController extends Controller
     /** POST /products/stock/check */
     public function checkStock(Request $request)
     {
-        $payload = $request->validate([
+        $data = $request->validate([
             'items' => 'required|array|min:1',
             'items.*.product_id' => 'required|integer|exists:products,id',
-            'items.*.quantity' => 'required|integer|min:1'
+            'items.*.quantity'   => 'required|integer|min:1',
         ]);
 
-        $ids = collect($payload['items'])->pluck('product_id');
+        // Traemos los productos involucrados
+        $ids = collect($data['items'])->pluck('product_id')->unique()->values();
         $products = Product::whereIn('id', $ids)->get()->keyBy('id');
 
-        $responseProducts = [];
-        foreach ($payload['items'] as $item) {
-            /** @var Product|null $p */
-            $p = $products->get($item['product_id']);
-            if (!$p || $p->stock < $item['quantity']) {
-                return response()->json([
-                    'message' => 'Stock insuficiente para el producto: ' . ($p->name ?? 'Desconocido')
-                ], 422);
+        // Validar existencias
+        $insufficient = [];
+        foreach ($data['items'] as $it) {
+            $p = $products[$it['product_id']];
+            if ($p->stock < $it['quantity']) {
+                $insufficient[] = [
+                    'product_id' => $p->id,
+                    'name'       => $p->name,
+                    'requested'  => (int)$it['quantity'],
+                    'available'  => (int)$p->stock,
+                ];
             }
-            $responseProducts[] = [
-                'product_id' => $p->id,
-                'name' => $p->name,
-                'price' => $p->sale_price,
-                'quantity' => (int)$item['quantity']
-            ];
         }
 
-        return response()->json(['products' => $responseProducts]);
+        if (!empty($insufficient)) {
+            return response()->json([
+                'message' => 'Stock insuficiente',
+                'details' => $insufficient
+            ], 422);
+        }
+
+        // Estructura esperada por tu frontend (price = sale_price)
+        $responseProducts = collect($data['items'])->map(function ($it) use ($products) {
+            $p = $products[$it['product_id']];
+            return [
+                'product_id' => $p->id,
+                'name'       => $p->name,
+                'price'      => (float)$p->sale_price,
+                'quantity'   => (int)$it['quantity'],
+            ];
+        })->values();
+
+        return response()->json(['products' => $responseProducts], 200);
     }
 
     /** POST /products/stock/update */
@@ -172,42 +188,40 @@ class ProductController extends Controller
         $data = $request->validate([
             'items' => 'required|array|min:1',
             'items.*.product_id' => 'required|integer|exists:products,id',
-            'items.*.quantity' => 'required|integer|min:1',
-            'operation' => 'required|in:increment,decrement'
+            'items.*.quantity'   => 'required|integer|min:1',
+            'operation'          => 'required|in:increment,decrement',
         ]);
 
-        DB::beginTransaction();
-        try {
-            foreach ($data['items'] as $item) {
-                $id = (int)$item['product_id'];
-                $qty = (int)$item['quantity'];
+        // Actualización atómica con bloqueo de fila
+        DB::transaction(function () use ($data) {
+            foreach ($data['items'] as $it) {
+                // Bloqueo de fila para concurrencia segura
+                $product = Product::where('id', $it['product_id'])->lockForUpdate()->first();
 
                 if ($data['operation'] === 'decrement') {
-                    // Descuento atómico si hay stock suficiente
-                    $updated = DB::update(
-                        "UPDATE products SET stock = stock - ? WHERE id = ? AND stock >= ?",
-                        [$qty, $id, $qty]
-                    );
-                    if ($updated === 0) {
-                        DB::rollBack();
-                        $name = optional(Product::find($id))->name ?? 'Desconocido';
-                        return response()->json([
-                            'message' => "Stock insuficiente para {$name}"
-                        ], 422);
+                    if ($product->stock < $it['quantity']) {
+                        // Si no alcanza, abortamos transacción
+                        abort(response()->json([
+                            'message' => "Stock insuficiente para {$product->name}",
+                            'details' => [
+                                'product_id' => $product->id,
+                                'requested'  => (int)$it['quantity'],
+                                'available'  => (int)$product->stock,
+                            ]
+                        ], 422));
                     }
+                    $product->decrement('stock', $it['quantity']);
                 } else {
-                    DB::update(
-                        "UPDATE products SET stock = stock + ? WHERE id = ?",
-                        [$qty, $id]
-                    );
+                    $product->increment('stock', $it['quantity']);
                 }
             }
+        });
 
-            DB::commit();
-            return response()->json(['message' => 'Stock actualizado correctamente']);
-        } catch (\Throwable $e) {
-            DB::rollBack();
-            return response()->json(['message' => 'Error al actualizar stock'], 500);
-        }
+        return response()->json([
+            'message' => 'Stock actualizado',
+            'items'   => $data['items'],
+            'operation' => $data['operation'],
+        ], 200);
     }
 }
+

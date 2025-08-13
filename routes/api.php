@@ -17,6 +17,7 @@ Route::get('products/{id}', [ProductController::class, 'show']);
     Route::delete('products/{id}', [ProductController::class, 'destroy']);
 
     // Stock helpers para Ventas API
-    Route::post('products/stock/check', [ProductController::class, 'checkStock']);
-    Route::post('products/stock/update', [ProductController::class, 'updateStock']);
-// });
+    Route::prefix('products')->group(function () {
+    Route::post('check', [ProductController::class, 'checkStock']);           // POST /api/products/check
+    Route::post('update-stock', [ProductController::class, 'updateStock']);   // POST /api/products/update-stock
+});
