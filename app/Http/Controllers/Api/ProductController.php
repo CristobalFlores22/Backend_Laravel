@@ -9,48 +9,41 @@ use App\Models\Product;
 
 class ProductController extends Controller
 {
-    /** GET /products?search=&category=&per_page= */
     public function index(Request $request)
     {
-        $q = Product::query();
+        $q = Product::query()->with('category');
 
         if ($s = $request->query('search')) {
             $q->where('name', 'like', "%{$s}%");
         }
-        if ($c = $request->query('category')) {
-            $q->where('category', $c);
+
+        if ($c = $request->query('category_id')) {
+            $q->where('category_id', $c);
         }
 
         $perPage = min((int)$request->query('per_page', 20), 100);
-
-        return response()->json(
-            $q->orderBy('name')->paginate($perPage)
-        );
+        return response()->json($q->orderBy('name')->paginate($perPage));
     }
 
     public function store(Request $request)
     {
-        $categories = 'blanco,integral,dulce,artesanal,sin_gluten,regional,enriquecido,de_molde,crujiente,dulce_relleno,salado,festivo,vegano';
-
         $validated = $request->validate([
             'name' => 'required|string|max:100',
             'description' => 'nullable|string|max:1000',
             'purchase_price' => 'required|numeric|min:0',
             'sale_price' => 'required|numeric|min:0',
-            'category' => "required|in:$categories",
+            'category_id' => 'required|exists:categories,id',
             'stock' => 'required|integer|min:0',
         ]);
 
-        // Regla de negocio: venta >= compra
         if ($validated['sale_price'] < $validated['purchase_price']) {
             return response()->json([
                 'message' => 'El precio de venta no puede ser menor al precio de compra'
             ], 422);
         }
 
-        // Unicidad por (name, category)
         $exists = Product::where('name', $validated['name'])
-            ->where('category', $validated['category'])
+            ->where('category_id', $validated['category_id'])
             ->exists();
 
         if ($exists) {
@@ -59,47 +52,45 @@ class ProductController extends Controller
             ], 422);
         }
 
+        $validated['iva'] = 16.00;
+
         $product = Product::create($validated);
         return response()->json($product, 201);
     }
 
     public function show($id)
     {
-        return response()->json(Product::findOrFail($id));
+        return response()->json(Product::with('category')->findOrFail($id));
     }
 
     public function update(Request $request, $id)
     {
-        $categories = 'blanco,integral,dulce,artesanal,sin_gluten,regional,enriquecido,de_molde,crujiente,dulce_relleno,salado,festivo,vegano';
-
         $rules = [
             'name' => 'sometimes|string|max:100',
             'description' => 'sometimes|nullable|string|max:1000',
             'purchase_price' => 'sometimes|numeric|min:0',
             'sale_price' => 'sometimes|numeric|min:0',
-            'category' => "sometimes|in:$categories",
+            'category_id' => 'sometimes|exists:categories,id',
             'stock' => 'sometimes|integer|min:0',
         ];
 
         $data = $request->validate($rules);
-
         $product = Product::findOrFail($id);
 
-        // Mezcla valores efectivos para validar reglas de negocio
         $effective = array_merge($product->only([
-            'name','description','purchase_price','sale_price','category','stock'
+            'name','description','purchase_price','sale_price','category_id','stock'
         ]), $data);
 
-        if (isset($effective['sale_price'], $effective['purchase_price'])
-            && $effective['sale_price'] < $effective['purchase_price']) {
+        if (isset($effective['sale_price'], $effective['purchase_price']) &&
+            $effective['sale_price'] < $effective['purchase_price']) {
             return response()->json([
                 'message' => 'El precio de venta no puede ser menor al precio de compra'
             ], 422);
         }
 
-        if (isset($effective['name']) || isset($effective['category'])) {
+        if (isset($effective['name']) || isset($effective['category_id'])) {
             $exists = Product::where('name', $effective['name'])
-                ->where('category', $effective['category'])
+                ->where('category_id', $effective['category_id'])
                 ->where('id', '!=', $product->id)
                 ->exists();
             if ($exists) {
@@ -120,21 +111,16 @@ class ProductController extends Controller
         return response()->json(null, 204);
     }
 
-    /** GET /products/available-for-sales */
     public function availableForSales()
     {
         return response()->json([
             'products' => Product::available()
+                ->with('category')
                 ->orderBy('name')
-                ->get(['id', 'name', 'sale_price', 'stock', 'category']),
-            'categories' => [
-                'blanco','integral','dulce','artesanal','sin_gluten','regional',
-                'enriquecido','de_molde','crujiente','dulce_relleno','salado','festivo','vegano'
-            ]
+                ->get(['id', 'name', 'sale_price', 'stock', 'category_id', 'iva']),
         ]);
     }
 
-    /** POST /products/stock/check */
     public function checkStock(Request $request)
     {
         $data = $request->validate([
@@ -143,11 +129,9 @@ class ProductController extends Controller
             'items.*.quantity'   => 'required|integer|min:1',
         ]);
 
-        // Traemos los productos involucrados
         $ids = collect($data['items'])->pluck('product_id')->unique()->values();
         $products = Product::whereIn('id', $ids)->get()->keyBy('id');
 
-        // Validar existencias
         $insufficient = [];
         foreach ($data['items'] as $it) {
             $p = $products[$it['product_id']];
@@ -168,7 +152,6 @@ class ProductController extends Controller
             ], 422);
         }
 
-        // Estructura esperada por tu frontend (price = sale_price)
         $responseProducts = collect($data['items'])->map(function ($it) use ($products) {
             $p = $products[$it['product_id']];
             return [
@@ -182,7 +165,6 @@ class ProductController extends Controller
         return response()->json(['products' => $responseProducts], 200);
     }
 
-    /** POST /products/stock/update */
     public function updateStock(Request $request)
     {
         $data = $request->validate([
@@ -192,15 +174,12 @@ class ProductController extends Controller
             'operation'          => 'required|in:increment,decrement',
         ]);
 
-        // Actualización atómica con bloqueo de fila
         DB::transaction(function () use ($data) {
             foreach ($data['items'] as $it) {
-                // Bloqueo de fila para concurrencia segura
                 $product = Product::where('id', $it['product_id'])->lockForUpdate()->first();
 
                 if ($data['operation'] === 'decrement') {
                     if ($product->stock < $it['quantity']) {
-                        // Si no alcanza, abortamos transacción
                         abort(response()->json([
                             'message' => "Stock insuficiente para {$product->name}",
                             'details' => [
@@ -219,9 +198,8 @@ class ProductController extends Controller
 
         return response()->json([
             'message' => 'Stock actualizado',
-            'items'   => $data['items'],
+            'items' => $data['items'],
             'operation' => $data['operation'],
         ], 200);
     }
 }
-
